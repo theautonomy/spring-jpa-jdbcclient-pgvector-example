@@ -1,0 +1,345 @@
+= Items Table - JPA and JdbcClient Guide
+
+This guide demonstrates how to interface with the `items` table using both *JPA* and *JdbcClient* approaches.
+
+== Table Structure
+
+The `items` table contains:
+
+- `id` - SERIAL PRIMARY KEY
+- `name` - TEXT NOT NULL
+- `category` - TEXT
+- `price` - NUMERIC(10, 2)
+- `embedding` - vector(4) (4-dimensional embedding using pgvector)
+- `created_at` - TIMESTAMP
+
+== Files Created
+
+=== Entity and Repository (JPA)
+
+. *`Item.java`* - JPA entity representing the items table
+  * Location: `src/main/java/com/example/demo/entity/Item.java`
+  * Uses Hibernate's vector type support for the embedding field
+
+. *`ItemRepository.java`* - Spring Data JPA repository
+  * Location: `src/main/java/com/example/demo/repository/ItemRepository.java`
+  * Provides native queries for vector similarity searches
+  * Supports L2, cosine, and inner product distance metrics
+
+=== JdbcClient Service
+
+[start=3]
+. *`ItemJdbcService.java`* - Service using JdbcClient
+  * Location: `src/main/java/com/example/demo/service/ItemJdbcService.java`
+  * Modern fluent API for database operations
+  * Returns detailed results including distance values
+
+=== Unified Service Layer
+
+[start=4]
+. *`ItemService.java`* - High-level service combining both approaches
+  * Location: `src/main/java/com/example/demo/service/ItemService.java`
+  * Provides a simple API for common operations
+  * Uses JPA by default, JdbcClient for advanced queries
+
+=== REST API
+
+[start=5]
+. *`ItemController.java`* - REST API endpoints
+  * Location: `src/main/java/com/example/demo/api/ItemController.java`
+  * Exposes all functionality via HTTP endpoints
+
+=== Demo Runner
+
+[start=6]
+. *`ItemsDemoRunner.java`* - Demonstration at startup
+  * Location: `src/main/java/com/example/demo/config/ItemsDemoRunner.java`
+  * Runs sample queries when the application starts
+
+== Usage Examples
+
+=== 1. Basic CRUD Operations (JPA)
+
+[source,java]
+----
+@Autowired
+private ItemService itemService;
+
+// Get all items
+List<Item> items = itemService.getAllItems();
+
+// Get by ID
+Optional<Item> item = itemService.getItemById(1L);
+
+// Get by category
+List<Item> fruits = itemService.findByCategory("Fruit");
+
+// Save new item
+Item newItem = new Item("Tomato", "Vegetable",
+    new BigDecimal("1.30"),
+    new float[]{0.25f, 0.15f, 0.75f, 0.25f});
+itemService.saveItem(newItem);
+
+// Delete
+itemService.deleteItem(1L);
+----
+
+=== 2. Vector Similarity Search (JPA)
+
+[source,java]
+----
+// Find 5 items similar to Apple's embedding using L2 distance
+List<Item> similar = itemService.findSimilarItemsL2("[1.0, 0.5, 0.2, 0.1]", 5);
+
+// Find similar items using cosine distance (best for normalized vectors)
+List<Item> similar = itemService.findSimilarItemsCosine("[0.2, 0.1, 0.8, 0.3]", 5);
+
+// Find similar items using inner product
+List<Item> similar = itemService.findSimilarItemsInnerProduct("[0.1, 0.2, 0.3, 0.9]", 5);
+
+// Find items within distance threshold
+List<Item> nearby = itemService.findItemsWithinDistance("[1.0, 0.5, 0.2, 0.1]", 0.5);
+----
+
+=== 3. Filtered Similarity Search (JPA)
+
+[source,java]
+----
+// Find similar fruits only
+List<Item> fruits = itemService.findSimilarInCategory(
+    "Fruit", "[1.0, 0.6, 0.1, 0.0]", 3);
+
+// Find similar items under $3.00
+List<Item> affordable = itemService.findSimilarUnderPrice(
+    new BigDecimal("3.00"), "[0.5, 0.5, 0.5, 0.5]", 5);
+
+// Complex filtering: category, price range, and similarity
+List<Item> filtered = itemService.findSimilarWithFilters(
+    "Vegetable",
+    new BigDecimal("1.00"),
+    new BigDecimal("2.00"),
+    "[0.2, 0.1, 0.8, 0.3]",
+    5);
+----
+
+=== 4. JdbcClient with Distance Values
+
+[source,java]
+----
+@Autowired
+private ItemJdbcService itemJdbcService;
+
+// Get similar items with distance values
+List<ItemJdbcService.ItemWithDistance> results =
+    itemJdbcService.findSimilarByL2Distance("[1.0, 0.5, 0.2, 0.1]", 5);
+
+results.forEach(result -> {
+    System.out.println(result.item().getName() + ": distance = " + result.distance());
+});
+
+// Compare all distance metrics
+List<ItemJdbcService.ItemWithAllDistances> comparison =
+    itemJdbcService.compareDistanceMetrics("[1.0, 0.5, 0.2, 0.1]", 5);
+
+comparison.forEach(result -> {
+    System.out.println(String.format("%s: L2=%.4f, Cosine=%.4f, InnerProd=%.4f",
+        result.item().getName(),
+        result.l2Distance(),
+        result.cosineDistance(),
+        result.negInnerProduct()
+    ));
+});
+----
+
+=== 5. Direct Repository Access (JPA)
+
+[source,java]
+----
+@Autowired
+private ItemRepository itemRepository;
+
+// Standard JPA methods
+List<Item> all = itemRepository.findAll();
+Optional<Item> item = itemRepository.findById(1L);
+List<Item> fruits = itemRepository.findByCategory("Fruit");
+
+// Vector similarity with custom native queries
+List<Item> similar = itemRepository.findSimilarByL2Distance("[1.0, 0.5, 0.2, 0.1]", 5);
+List<Item> nearby = itemRepository.findWithinDistance("[1.0, 0.5, 0.2, 0.1]", 0.5);
+----
+
+== REST API Endpoints
+
+Once the application is running, you can access these endpoints:
+
+=== Basic Operations
+
+- `GET /api/items` - Get all items
+- `GET /api/items/{id}` - Get item by ID
+- `GET /api/items/category/{category}` - Get items by category
+- `POST /api/items` - Create new item
+- `PUT /api/items/{id}` - Update item
+- `DELETE /api/items/{id}` - Delete item
+
+=== Similarity Search
+
+- `GET /api/items/search/similar?vector=[1.0,0.5,0.2,0.1]&limit=5`
+  ** Find similar items using L2 distance
+
+- `GET /api/items/search/similar-cosine?vector=[0.2,0.1,0.8,0.3]&limit=5`
+  ** Find similar items using cosine distance
+
+- `GET /api/items/search/similar-category?category=Fruit&vector=[1.0,0.6,0.1,0.0]&limit=3`
+  ** Find similar items within a category
+
+- `GET /api/items/search/similar-price?maxPrice=3.00&vector=[0.5,0.5,0.5,0.5]&limit=5`
+  ** Find similar items under a price
+
+- `GET /api/items/search/compare-distances?vector=[1.0,0.5,0.2,0.1]&limit=5`
+  ** Compare all distance metrics
+
+=== Statistics
+
+- `GET /api/items/stats/categories` - Get item counts by category
+
+== Sample cURL Commands
+
+[source,bash]
+----
+# Get all items
+curl http://localhost:8080/api/items
+
+# Find similar items to Apple
+curl "http://localhost:8080/api/items/search/similar?vector=%5B1.0,0.5,0.2,0.1%5D&limit=5"
+
+# Find similar vegetables
+curl "http://localhost:8080/api/items/search/similar-category?category=Vegetable&vector=%5B0.2,0.1,0.8,0.3%5D&limit=5"
+
+# Compare distance metrics
+curl "http://localhost:8080/api/items/search/compare-distances?vector=%5B1.0,0.5,0.2,0.1%5D&limit=5"
+
+# Get category statistics
+curl http://localhost:8080/api/items/stats/categories
+----
+
+== Distance Metrics
+
+=== L2 Distance (Euclidean Distance) - `<->`
+
+- Measures straight-line distance between vectors
+- Smaller distance = more similar
+- Good for general similarity
+- Example: Find items most similar to Apple
+
+=== Cosine Distance - `<=>`
+
+- Measures angle between vectors (1 - cosine similarity)
+- Best for normalized/directional similarity
+- Range: 0 (identical direction) to 2 (opposite direction)
+- Example: Find items in similar "categories" based on patterns
+
+=== Inner Product - `<#>`
+
+- Measures dot product (returns negative value in pgvector)
+- Higher absolute value = more similar
+- Good for magnitude-aware similarity
+- Example: Find items with similar "strength" or "intensity"
+
+=== L1 Distance (Manhattan Distance) - `<+>`
+
+- Sum of absolute differences
+- Less sensitive to outliers than L2
+- Example: Find items with similar component-wise values
+
+== Sample Queries from db.md
+
+The service methods correspond to these SQL queries from db.md:
+
+. *L2 Distance* - Lines 66-77
++
+[source,sql]
+----
+SELECT name, category, embedding <-> '[1.0, 0.5, 0.2, 0.1]' AS distance
+FROM items ORDER BY distance LIMIT 5
+----
++
+→ `itemService.findSimilarItemsL2("[1.0, 0.5, 0.2, 0.1]", 5)`
+
+. *Cosine Distance* - Lines 100-109
++
+[source,sql]
+----
+SELECT name, embedding <=> '[0.2, 0.1, 0.8, 0.3]' AS distance
+FROM items ORDER BY distance LIMIT 5
+----
++
+→ `itemService.findSimilarItemsCosine("[0.2, 0.1, 0.8, 0.3]", 5)`
+
+. *Category Filter* - Lines 140-148
++
+[source,sql]
+----
+SELECT name, embedding <-> '[1.0, 0.6, 0.1, 0.0]' AS distance
+FROM items WHERE category = 'Fruit' ORDER BY distance LIMIT 3
+----
++
+→ `itemService.findSimilarInCategory("Fruit", "[1.0, 0.6, 0.1, 0.0]", 3)`
+
+. *Distance Comparison* - Lines 190-202
++
+[source,sql]
+----
+SELECT name, embedding <-> vec AS l2, embedding <=> vec AS cosine, ...
+FROM items ORDER BY l2 LIMIT 5
+----
++
+→ `itemService.compareAllDistances("[1.0, 0.5, 0.2, 0.1]", 5)`
+
+== When to Use JPA vs JdbcClient
+
+=== Use JPA when:
+
+- You need standard CRUD operations
+- You want automatic object mapping
+- You prefer repository pattern
+- You need transaction management
+- You want to work with entity objects
+
+=== Use JdbcClient when:
+
+- You need detailed result information (like distance values)
+- You want more control over SQL
+- You need custom result types (records, DTOs)
+- You prefer fluent API style
+- You need fine-grained performance tuning
+
+== Tips
+
+. *Vector Format*: Always use the format `[1.0, 0.5, 0.2, 0.1]` for vector strings
+. *Distance Thresholds*: Experiment with different thresholds for your use case
+. *Performance*: Consider adding vector indexes for large datasets (HNSW or IVFFlat)
+. *Normalization*: For cosine distance, consider normalizing vectors first
+. *Caching*: Cache frequently used vectors or query results for better performance
+
+== Running the Demo
+
+When you start the application, the `ItemsDemoRunner` will automatically execute
+sample queries demonstrating both JPA and JdbcClient approaches. Check the console
+output to see the results!
+
+[source,bash]
+----
+mvn spring-boot:run
+----
+
+Look for output like:
+
+[source]
+----
+================================================================================
+ITEMS TABLE DEMO - JPA and JdbcClient Examples
+================================================================================
+
+>>> 1. BASIC QUERIES (JPA)
+...
+----

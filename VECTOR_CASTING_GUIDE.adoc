@@ -1,0 +1,817 @@
+= PostgreSQL Vector Casting - Complete Guide
+:toc:
+:toc-title: Table of Contents
+:toclevels: 3
+
+This comprehensive guide covers vector casting in PostgreSQL with pgvector, including both general concepts and specific examples from the codebase.
+
+== Quick Start
+
+PostgreSQL pgvector supports multiple ways to cast strings to vectors:
+
+[source,sql]
+----
+-- Method 1: CAST() function (SQL standard)
+SELECT embedding <-> CAST('[1.0, 0.5, 0.2, 0.1]' AS vector) AS distance FROM items;
+
+-- Method 2: ::vector operator (PostgreSQL-specific)
+SELECT embedding <-> '[1.0, 0.5, 0.2, 0.1]'::vector AS distance FROM items;
+
+-- Method 3: Direct string (implicit cast, less explicit)
+SELECT embedding <-> '[1.0, 0.5, 0.2, 0.1]' AS distance FROM items;
+----
+
+**Bottom line:** All methods produce identical results and performance. Choose based on your preference.
+
+== Overview
+
+PostgreSQL's pgvector extension requires proper type casting when working with vector data. This guide demonstrates:
+
+- Different casting syntaxes and when to use each
+- Code examples from `ItemJdbcService`, `ItemRepository`, and `VectorCastingExamples`
+- REST API endpoints for testing
+- Performance comparisons and best practices
+
+== Casting Methods Explained
+
+=== Method 1: CAST() Function (SQL Standard)
+
+The `CAST()` function is the SQL standard way to convert types.
+
+[source,sql]
+----
+-- Basic usage
+SELECT embedding <-> CAST('[1.0, 0.5, 0.2, 0.1]' AS vector) AS distance
+FROM items
+ORDER BY distance
+LIMIT 5;
+
+-- With parameters
+SELECT embedding <-> CAST(:vectorParam AS vector) AS distance
+FROM items;
+----
+
+**Pros:**
+
+- SQL standard syntax (ANSI SQL)
+- Most explicit and clear intent
+- Works across different SQL dialects (where supported)
+- Easy to understand for developers from other SQL backgrounds
+
+**Cons:**
+
+- More verbose than PostgreSQL-specific alternatives
+- Requires more typing
+
+**Java/JdbcClient Example:**
+
+[source,java]
+----
+String sql = """
+    SELECT id, name, embedding <-> CAST(:vec AS vector) AS distance
+    FROM items
+    ORDER BY distance
+    LIMIT :limit
+    """;
+
+List<Item> results = jdbcClient.sql(sql)
+    .param("vec", "[1.0, 0.5, 0.2, 0.1]")
+    .param("limit", 5)
+    .query(this::mapRow)
+    .list();
+----
+
+=== Method 2: PostgreSQL :: Operator (Most Common)
+
+The `::` operator is PostgreSQL's shorthand for type casting.
+
+[source,sql]
+----
+-- Basic usage
+SELECT embedding <-> '[1.0, 0.5, 0.2, 0.1]'::vector AS distance
+FROM items
+ORDER BY distance
+LIMIT 5;
+
+-- With parameters
+SELECT embedding <-> :vectorParam::vector AS distance
+FROM items;
+----
+
+**Pros:**
+
+- Concise and readable
+- PostgreSQL idiomatic (used throughout PostgreSQL ecosystem)
+- Most commonly used in PostgreSQL community
+- Slightly less verbose than CAST()
+
+**Cons:**
+
+- PostgreSQL-specific (not portable to other databases)
+- May confuse developers from other SQL backgrounds
+
+**Java/JdbcClient Example:**
+
+[source,java]
+----
+String sql = """
+    SELECT id, name, embedding <-> :vec::vector AS distance
+    FROM items
+    ORDER BY distance
+    LIMIT :limit
+    """;
+
+List<Item> results = jdbcClient.sql(sql)
+    .param("vec", "[1.0, 0.5, 0.2, 0.1]")
+    .param("limit", 5)
+    .query(this::mapRow)
+    .list();
+----
+
+=== Method 3: Direct String (Implicit Cast)
+
+In some contexts, PostgreSQL can implicitly cast strings to vectors.
+
+[source,sql]
+----
+-- Implicit casting (may not always work)
+SELECT embedding <-> '[1.0, 0.5, 0.2, 0.1]' AS distance
+FROM items;
+----
+
+**Pros:**
+
+- Shortest syntax
+- Less typing required
+
+**Cons:**
+
+- Less explicit (unclear intent)
+- May not work in all contexts
+- Can be confusing for code readers
+- Not recommended for production code
+
+**Recommendation:** Avoid in production; use explicit casting instead.
+
+=== Method 4: Array to Vector Constructor
+
+Convert PostgreSQL array to vector using the `vector()` constructor.
+
+[source,sql]
+----
+-- Using array constructor
+SELECT embedding <-> vector(ARRAY[1.0, 0.5, 0.2, 0.1]) AS distance
+FROM items;
+----
+
+**Use case:** When building vectors dynamically from individual components.
+
+== Codebase Implementation
+
+=== ItemJdbcService Methods
+
+The `ItemJdbcService` provides parallel implementations demonstrating both casting syntaxes.
+
+==== Original Methods (::vector syntax)
+
+[source,java]
+----
+// L2 distance with ::vector
+List<ItemWithDistance> findSimilarByL2Distance(String queryVector, int limit)
+// SQL: embedding <-> :queryVector::vector
+
+// Cosine distance with ::vector
+List<ItemWithDistance> findSimilarByCosineDistance(String queryVector, int limit)
+// SQL: embedding <=> :queryVector::vector
+
+// Inner product with ::vector
+List<ItemWithDistance> findSimilarByInnerProduct(String queryVector, int limit)
+// SQL: embedding <#> :queryVector::vector
+
+// Compare all metrics with ::vector
+List<ItemWithAllDistances> compareDistanceMetrics(String queryVector, int limit)
+// SQL: All operators use ::vector
+----
+
+==== CAST() Method Equivalents
+
+[source,java]
+----
+// L2 distance with CAST()
+List<ItemWithDistance> findSimilarByL2DistanceUsingCast(String queryVector, int limit)
+// SQL: embedding <-> CAST(:queryVector AS vector)
+
+// Cosine distance with CAST()
+List<ItemWithDistance> findSimilarByCosineDistanceUsingCast(String queryVector, int limit)
+// SQL: embedding <=> CAST(:queryVector AS vector)
+
+// Inner product with CAST()
+List<ItemWithDistance> findSimilarByInnerProductUsingCast(String queryVector, int limit)
+// SQL: embedding <#> CAST(:queryVector AS vector)
+
+// Within distance threshold with CAST()
+List<ItemWithDistance> findWithinDistanceUsingCast(String queryVector, double threshold)
+// SQL: WHERE embedding <-> CAST(:queryVector AS vector) < :threshold
+
+// Compare all metrics with CAST()
+List<ItemWithAllDistances> compareDistanceMetricsUsingCast(String queryVector, int limit)
+// SQL: All operators use CAST()
+
+// Mixed casting (CAST() and ::vector together)
+List<ItemWithAllDistances> compareDistanceMetricsMixedCasting(String queryVector, int limit)
+// SQL: Alternates between CAST() and ::vector for different operators
+----
+
+==== Complex Operations
+
+[source,java]
+----
+// Complex filtered search with CAST()
+List<ItemWithDistance> findSimilarWithFiltersUsingCast(
+    String category, BigDecimal minPrice, BigDecimal maxPrice,
+    String queryVector, int limit)
+// SQL: Uses CAST() with WHERE category and price filters
+
+// Insert with CAST()
+int insertUsingCast(Item item)
+// SQL: INSERT ... VALUES (..., CAST(:embedding AS vector))
+
+// Update with CAST()
+int updateUsingCast(Item item)
+// SQL: UPDATE ... SET embedding = CAST(:embedding AS vector)
+----
+
+=== ItemService Wrapper Methods
+
+Convenient access layer:
+
+[source,java]
+----
+// Using ::vector (original)
+List<ItemJdbcService.ItemWithDistance> findSimilarWithJdbcClient(String queryVector, int limit)
+
+// Using CAST()
+List<ItemJdbcService.ItemWithDistance> findSimilarWithCast(String queryVector, int limit)
+List<ItemJdbcService.ItemWithDistance> findSimilarCosineWithCast(String queryVector, int limit)
+List<ItemJdbcService.ItemWithDistance> findSimilarInnerProductWithCast(String queryVector, int limit)
+
+// Compare distances
+List<ItemJdbcService.ItemWithAllDistances> compareAllDistances(String queryVector, int limit)
+List<ItemJdbcService.ItemWithAllDistances> compareAllDistancesWithCast(String queryVector, int limit)
+List<ItemJdbcService.ItemWithAllDistances> compareAllDistancesMixed(String queryVector, int limit)
+----
+
+=== ItemRepository (JPA)
+
+JPA repository uses CAST() in native queries:
+
+[source,java]
+----
+@Query(value = """
+    SELECT i.*, i.embedding <-> CAST(:queryVector AS vector) AS distance
+    FROM items i
+    ORDER BY distance
+    LIMIT :limit
+    """, nativeQuery = true)
+List<Item> findSimilarByL2Distance(@Param("queryVector") String queryVector,
+                                   @Param("limit") int limit);
+----
+
+== REST API Endpoints
+
+=== ItemController Endpoints
+
+==== Original Endpoints (::vector)
+
+[source,bash]
+----
+# L2 distance
+GET /api/items/search/similar?vector=[1.0,0.5,0.2,0.1]&limit=5
+
+# Cosine distance
+GET /api/items/search/similar-cosine?vector=[0.2,0.1,0.8,0.3]&limit=5
+
+# Compare distances
+GET /api/items/search/compare-distances?vector=[1.0,0.5,0.2,0.1]&limit=5
+----
+
+==== CAST() Endpoints
+
+[source,bash]
+----
+# L2 distance with CAST()
+GET /api/items/search/similar-cast?vector=[1.0,0.5,0.2,0.1]&limit=5
+
+# Cosine distance with CAST()
+GET /api/items/search/similar-cosine-cast?vector=[0.2,0.1,0.8,0.3]&limit=5
+
+# Inner product with CAST()
+GET /api/items/search/similar-innerproduct-cast?vector=[0.1,0.2,0.3,0.9]&limit=5
+
+# Compare all distances with CAST()
+GET /api/items/search/compare-distances-cast?vector=[1.0,0.5,0.2,0.1]&limit=5
+
+# Mixed casting comparison
+GET /api/items/search/compare-distances-mixed?vector=[1.0,0.5,0.2,0.1]&limit=5
+
+# Within distance threshold
+GET /api/items/search/within-distance-cast?vector=[1.0,0.5,0.2,0.1]&threshold=0.5
+----
+
+=== VectorCastingController Endpoints
+
+Dedicated endpoints for testing casting methods:
+
+[source,bash]
+----
+# Get documentation
+GET /api/vector-casting/examples
+
+# Test CAST() function
+GET /api/vector-casting/cast-function?vector=[1.0,0.5,0.2,0.1]&limit=5
+
+# Test ::vector operator
+GET /api/vector-casting/colon-cast?vector=[1.0,0.5,0.2,0.1]&limit=5
+
+# Test direct string
+GET /api/vector-casting/direct-string?vector=[1.0,0.5,0.2,0.1]&limit=5
+
+# Compare all distance metrics
+GET /api/vector-casting/compare-distances?vector=[1.0,0.5,0.2,0.1]&limit=5
+
+# Complex search with filters
+GET /api/vector-casting/complex-search?vector=[0.2,0.1,0.8,0.3]&category=Vegetable&minPrice=1.00&maxPrice=2.00&maxDistance=1.0&limit=5
+
+# Category center
+GET /api/vector-casting/category-center?category=Fruit&limit=3
+
+# Multi-vector comparison
+GET /api/vector-casting/multi-compare?v1=[1.0,0.5,0.2,0.1]&v2=[0.2,0.1,0.8,0.3]&v3=[0.1,0.2,0.3,0.9]&limit=5
+----
+
+== SQL Examples Side-by-Side
+
+=== Basic L2 Distance Query
+
+[cols="1,1"]
+|===
+|::vector Syntax |CAST() Syntax
+
+a|[source,sql]
+----
+SELECT id, name,
+  embedding <-> :vec::vector AS distance
+FROM items
+ORDER BY distance
+LIMIT 5
+----
+
+a|[source,sql]
+----
+SELECT id, name,
+  embedding <-> CAST(:vec AS vector) AS distance
+FROM items
+ORDER BY distance
+LIMIT 5
+----
+|===
+
+**Result:** Identical performance and output
+
+=== Compare All Distance Metrics
+
+[cols="1,1"]
+|===
+|::vector Syntax |CAST() Syntax
+
+a|[source,sql]
+----
+SELECT name,
+  embedding <-> :vec::vector AS l2,
+  embedding <=> :vec::vector AS cosine,
+  embedding <#> :vec::vector AS inner,
+  embedding <+> :vec::vector AS l1
+FROM items
+----
+
+a|[source,sql]
+----
+SELECT name,
+  embedding <-> CAST(:vec AS vector) AS l2,
+  embedding <=> CAST(:vec AS vector) AS cosine,
+  embedding <#> CAST(:vec AS vector) AS inner,
+  embedding <+> CAST(:vec AS vector) AS l1
+FROM items
+----
+|===
+
+**Result:** Identical performance and output
+
+=== Mixed Casting
+
+Both syntaxes can be mixed in the same query:
+
+[source,sql]
+----
+SELECT name,
+    embedding <-> CAST(:vec AS vector) AS l2,
+    embedding <=> :vec::vector AS cosine,
+    embedding <#> CAST(:vec AS vector) AS inner,
+    embedding <+> :vec::vector AS l1
+FROM items
+ORDER BY l2
+LIMIT 5
+----
+
+**Result:** Works perfectly - both syntaxes are interchangeable
+
+=== Insert with Casting
+
+[source,sql]
+----
+-- Using CAST()
+INSERT INTO items (name, category, price, embedding)
+VALUES ('Strawberry', 'Fruit', 2.50, CAST('[0.95, 0.55, 0.15, 0.05]' AS vector));
+
+-- Using ::vector
+INSERT INTO items (name, category, price, embedding)
+VALUES ('Strawberry', 'Fruit', 2.50, '[0.95, 0.55, 0.15, 0.05]'::vector);
+----
+
+=== Update with Casting
+
+[source,sql]
+----
+-- Using CAST()
+UPDATE items
+SET embedding = CAST('[1.0, 0.6, 0.3, 0.1]' AS vector)
+WHERE id = 1;
+
+-- Using ::vector
+UPDATE items
+SET embedding = '[1.0, 0.6, 0.3, 0.1]'::vector
+WHERE id = 1;
+----
+
+=== Complex Filtered Query
+
+[source,sql]
+----
+SELECT id, name, category, price,
+       embedding <-> CAST(:vector AS vector) AS distance
+FROM items
+WHERE category = :category
+  AND price BETWEEN :minPrice AND :maxPrice
+  AND embedding <-> :vector::vector < :maxDistance
+ORDER BY distance
+LIMIT :limit
+----
+
+== Testing Examples
+
+=== Compare ::vector vs CAST()
+
+Both should return identical results:
+
+[source,bash]
+----
+# Using ::vector (original)
+curl "http://localhost:8080/api/items/search/similar?vector=%5B1.0,0.5,0.2,0.1%5D&limit=3"
+
+# Using CAST()
+curl "http://localhost:8080/api/items/search/similar-cast?vector=%5B1.0,0.5,0.2,0.1%5D&limit=3"
+
+# Results should be identical
+----
+
+=== Test Distance Comparison
+
+[source,bash]
+----
+# Original ::vector
+curl "http://localhost:8080/api/items/search/compare-distances?vector=%5B1.0,0.5,0.2,0.1%5D&limit=3"
+
+# CAST() version
+curl "http://localhost:8080/api/items/search/compare-distances-cast?vector=%5B1.0,0.5,0.2,0.1%5D&limit=3"
+
+# Mixed casting version
+curl "http://localhost:8080/api/items/search/compare-distances-mixed?vector=%5B1.0,0.5,0.2,0.1%5D&limit=3"
+
+# All three produce identical results
+----
+
+=== Test Specific Casting Methods
+
+[source,bash]
+----
+# Test CAST() function
+curl "http://localhost:8080/api/vector-casting/cast-function?vector=%5B1.0,0.5,0.2,0.1%5D&limit=5"
+
+# Test ::vector operator
+curl "http://localhost:8080/api/vector-casting/colon-cast?vector=%5B1.0,0.5,0.2,0.1%5D&limit=5"
+
+# Test direct string (implicit)
+curl "http://localhost:8080/api/vector-casting/direct-string?vector=%5B1.0,0.5,0.2,0.1%5D&limit=5"
+----
+
+== Performance Analysis
+
+=== Performance Comparison
+
+[cols="2,1,3"]
+|===
+|Aspect |Performance |Notes
+
+|Query Planning
+|Identical
+|PostgreSQL converts all syntaxes to same internal form
+
+|Execution Time
+|Identical
+|No overhead for any casting method
+
+|Index Usage
+|Identical
+|All syntaxes use indexes equally
+
+|Memory Usage
+|Identical
+|Same vector representation in memory
+
+|Mixed Casting
+|No overhead
+|Can mix both syntaxes freely
+|===
+
+=== Verify with EXPLAIN
+
+[source,sql]
+----
+-- Both produce identical query plans
+EXPLAIN ANALYZE
+SELECT embedding <-> CAST('[1,2,3,4]' AS vector)
+FROM items;
+
+EXPLAIN ANALYZE
+SELECT embedding <-> '[1,2,3,4]'::vector
+FROM items;
+----
+
+**Conclusion:** Both methods are optimized identically by PostgreSQL's query planner.
+
+== Best Practices
+
+=== Casting at Query Planning Time
+
+The cast is resolved once during query planning, not per row:
+
+[source,java]
+----
+// Good - cast happens once
+String sql = "SELECT * FROM items WHERE embedding <-> CAST(:vec AS vector) < 0.5";
+
+// Still good - equivalent performance
+String sql = "SELECT * FROM items WHERE embedding <-> :vec::vector < 0.5";
+----
+
+=== Always Use Parameterized Queries
+
+[source,java]
+----
+// Good - safe from SQL injection
+jdbcClient.sql("SELECT * WHERE embedding <-> CAST(:vec AS vector) < :threshold")
+    .param("vec", userInput)
+    .param("threshold", 0.5)
+    .query(...);
+
+// DANGEROUS - DO NOT DO THIS
+String sql = "SELECT * WHERE embedding <-> '" + userInput + "'::vector < 0.5";
+----
+
+=== Be Consistent Within Your Codebase
+
+Pick one style and stick with it:
+
+[source,java]
+----
+// Option 1: Use CAST() everywhere
+embedding <-> CAST(:vec AS vector)
+
+// Option 2: Use ::vector everywhere
+embedding <-> :vec::vector
+
+// Both are fine, just be consistent
+----
+
+=== Add Comments for Complex Queries
+
+[source,java]
+----
+String sql = """
+    -- Find items within L2 distance < 0.5 from query vector
+    SELECT id, name, embedding <-> CAST(:vec AS vector) AS distance
+    FROM items
+    WHERE embedding <-> :vec::vector < 0.5
+    ORDER BY distance
+    """;
+----
+
+=== Validate Vector Format
+
+[source,java]
+----
+public boolean isValidVectorString(String vector) {
+    // Matches [1.0, 0.5, 0.2, 0.1] format
+    return vector.matches("\\[([0-9.]+,\\s*)*[0-9.]+\\]");
+}
+
+public List<Item> search(String vectorString, int limit) {
+    if (!isValidVectorString(vectorString)) {
+        throw new IllegalArgumentException("Invalid vector format");
+    }
+    // ... proceed with query
+}
+----
+
+== Common Pitfalls
+
+=== Pitfall 1: Incorrect Vector Format
+
+[source,java]
+----
+// Wrong - missing brackets
+String vector = "1.0, 0.5, 0.2, 0.1";
+
+// Wrong - using parentheses
+String vector = "(1.0, 0.5, 0.2, 0.1)";
+
+// Wrong - using braces
+String vector = "{1.0, 0.5, 0.2, 0.1}";
+
+// Correct - square brackets
+String vector = "[1.0, 0.5, 0.2, 0.1]";
+----
+
+=== Pitfall 2: Dimension Mismatch
+
+[source,sql]
+----
+-- Table has vector(4)
+CREATE TABLE items (embedding vector(4));
+
+-- Wrong - 3 dimensions
+INSERT INTO items VALUES ('[1.0, 0.5, 0.2]'::vector);
+-- Error: expected 4 dimensions, got 3
+
+-- Correct - 4 dimensions
+INSERT INTO items VALUES ('[1.0, 0.5, 0.2, 0.1]'::vector);
+----
+
+=== Pitfall 3: SQL Injection Risk
+
+[source,java]
+----
+// DANGEROUS - DO NOT DO THIS
+String sql = "SELECT * FROM items WHERE embedding <-> '"
+    + userInput + "'::vector < 0.5";
+
+// Safe - use parameters
+String sql = "SELECT * FROM items WHERE embedding <-> :vec::vector < 0.5";
+jdbcClient.sql(sql).param("vec", userInput).query(...);
+----
+
+=== Pitfall 4: Inconsistent Spacing
+
+Both formats work, but be consistent:
+
+[source,sql]
+----
+-- Both valid
+'[1.0, 0.5, 0.2, 0.1]'::vector  -- with spaces
+'[1.0,0.5,0.2,0.1]'::vector     -- without spaces
+
+-- Choose one style for consistency
+----
+
+== Recommendations
+
+=== Which Casting Method to Use?
+
+[cols="2,3"]
+|===
+|Scenario |Recommendation
+
+|PostgreSQL-only project
+|Use `::vector` (more idiomatic)
+
+|Cross-database compatibility
+|Use `CAST()` (SQL standard)
+
+|New project
+|Choose one style and be consistent
+
+|Existing codebase
+|Follow the existing convention
+
+|Learning/teaching
+|Show both, explain they're equivalent
+
+|Maximum portability
+|Use `CAST()`
+
+|Maximum brevity
+|Use `::vector`
+
+|Code review
+|Either is acceptable
+|===
+
+=== Decision Matrix
+
+[cols="2,1,1,1"]
+|===
+|Feature |::vector |CAST() |Mixed
+
+|Performance
+|✓
+|✓
+|✓
+
+|PostgreSQL
+|✓
+|✓
+|✓
+
+|SQL Standard
+|✗
+|✓
+|Partial
+
+|Readability
+|Good
+|Explicit
+|Clear intent
+
+|Portability
+|Low
+|High
+|Low
+
+|Community usage
+|Very common
+|Common
+|Rare
+|===
+
+=== General Guidelines
+
+. **Both methods are production-ready** - Choose based on your requirements
+. **Performance is identical** - No need to benchmark
+. **Can be mixed** - Both work together in same query
+. **Be consistent** - Pick one style for your codebase
+. **Document your choice** - Help future developers understand why
+
+== Summary
+
+=== Quick Reference Table
+
+[cols="2,1,1,1,3"]
+|===
+|Method |Syntax |Standard |Verbose |Example
+
+|CAST()
+|`CAST(x AS vector)`
+|✓
+|High
+|`CAST('[1,2,3,4]' AS vector)`
+
+|::vector
+|`x::vector`
+|✗
+|Low
+|`'[1,2,3,4]'::vector`
+
+|Direct
+|`x`
+|✗
+|Lowest
+|`'[1,2,3,4]'` (not recommended)
+
+|Array
+|`vector(ARRAY[...])`
+|Partial
+|Highest
+|`vector(ARRAY[1,2,3,4])`
+|===
+
+=== Final Recommendation
+
+**For PostgreSQL-specific projects:** Use `::vector`
+
+**For maximum portability:** Use `CAST()`
+
+**For existing codebases:** Follow the existing style
+
+**Performance:** Both are identical - choose based on readability and portability needs
+
+All examples in this codebase demonstrate both approaches so you can choose what fits your project best!

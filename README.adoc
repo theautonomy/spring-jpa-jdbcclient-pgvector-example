@@ -1,0 +1,264 @@
+== Example of using Spring data jpa and JdbcClient to work with PostgreSQL with embedding column
+
+== Prepare database
+```
+docker run -e POSTGRES_USER=myuser \
+           -e POSTGRES_PASSWORD=mypassword \
+           -e POSTGRES_DB=myvectordb \
+           --name my_postgres \
+           -p 5432:5432 \
+           -d pgvector/pgvector:pg17
+```
+
+== Create PostgreSQL extensions
+```
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS hstore;
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+```
+
+== Create table and insert records
+```
+-- Create a simple items table with 4-dimensional vectors
+CREATE TABLE items (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    category TEXT,
+    price NUMERIC(10, 2),
+    embedding vector(4),
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Insert sample items with 4D vectors
+INSERT INTO items (name, category, price, embedding) VALUES
+    ('Apple',      'Fruit',      1.50, '[1.0, 0.5, 0.2, 0.1]'),
+    ('Banana',     'Fruit',      0.80, '[1.0, 0.6, 0.1, 0.0]'),
+    ('Orange',     'Fruit',      1.20, '[0.9, 0.5, 0.3, 0.2]'),
+    ('Carrot',     'Vegetable',  0.90, '[0.2, 0.1, 0.8, 0.3]'),
+    ('Broccoli',   'Vegetable',  2.00, '[0.1, 0.0, 0.9, 0.4]'),
+    ('Lettuce',    'Vegetable',  1.50, '[0.3, 0.2, 0.7, 0.2]'),
+    ('Chicken',    'Meat',       5.50, '[0.1, 0.2, 0.3, 0.9]'),
+    ('Beef',       'Meat',       8.00, '[0.0, 0.1, 0.2, 1.0]'),
+    ('Pork',       'Meat',       6.50, '[0.1, 0.3, 0.4, 0.8]'),
+    ('Milk',       'Dairy',      3.20, '[0.5, 0.8, 0.1, 0.2]'),
+    ('Cheese',     'Dairy',      4.50, '[0.4, 0.9, 0.2, 0.1]'),
+    ('Yogurt',     'Dairy',      2.80, '[0.6, 0.7, 0.1, 0.3]');
+```
+
+== Basic Queries
+
+=== View All Data
+
+[source,sql]
+----
+-- Select all items
+SELECT id, name, category, price, embedding
+FROM items
+ORDER BY name;
+
+-- Count by category
+SELECT category, COUNT(*) as item_count
+FROM items
+GROUP BY category
+ORDER BY category;
+----
+
+== L2 Distance Queries
+
+=== Find Similar Items (L2 Distance)
+
+[source,sql]
+----
+-- Find items similar to vector [1.0, 0.5, 0.2, 0.1]
+-- This is Apple's embedding
+SELECT
+    name,
+    category,
+    embedding,
+    embedding <-> '[1.0, 0.5, 0.2, 0.1]' AS l2_distance
+FROM items
+ORDER BY embedding <-> '[1.0, 0.5, 0.2, 0.1]'
+LIMIT 5;
+
+-- Expected: Apple (0.0), Banana, Orange (closest fruits)
+----
+
+=== Find Items Within Distance Threshold
+
+[source,sql]
+----
+-- Find items within L2 distance of 0.5
+SELECT
+    name,
+    category,
+    embedding <-> '[1.0, 0.5, 0.2, 0.1]' AS distance
+FROM items
+WHERE embedding <-> '[1.0, 0.5, 0.2, 0.1]' < 0.5
+ORDER BY distance;
+----
+
+== Cosine Distance Queries
+
+=== Cosine Similarity Search
+
+[source,sql]
+----
+-- Find items using cosine distance
+-- (Best for normalized/directional similarity)
+SELECT
+    name,
+    category,
+    embedding <=> '[0.2, 0.1, 0.8, 0.3]' AS cosine_distance,
+    1 - (embedding <=> '[0.2, 0.1, 0.8, 0.3]') AS cosine_similarity
+FROM items
+ORDER BY embedding <=> '[0.2, 0.1, 0.8, 0.3]'
+LIMIT 5;
+
+-- This query vector is similar to vegetables
+----
+
+== Inner Product Queries
+
+=== Inner Product Search
+
+[source,sql]
+----
+-- Find items using negative inner product
+-- (Higher absolute value = more similar)
+SELECT
+    name,
+    category,
+    embedding <#> '[0.1, 0.2, 0.3, 0.9]' AS neg_inner_product,
+    (embedding <#> '[0.1, 0.2, 0.3, 0.9]') * -1 AS inner_product_score
+FROM items
+ORDER BY embedding <#> '[0.1, 0.2, 0.3, 0.9]'
+LIMIT 5;
+
+-- This query vector is similar to meat items
+----
+
+== Filtered Similarity Search
+
+=== Search Within Category
+
+[source,sql]
+----
+-- Find similar fruits only
+SELECT
+    name,
+    price,
+    embedding <-> '[1.0, 0.6, 0.1, 0.0]' AS distance
+FROM items
+WHERE category = 'Fruit'
+ORDER BY embedding <-> '[1.0, 0.6, 0.1, 0.0]'
+LIMIT 3;
+----
+
+=== Search with Price Filter
+
+[source,sql]
+----
+-- Find similar items under $3.00
+SELECT
+    name,
+    category,
+    price,
+    embedding <-> '[0.5, 0.5, 0.5, 0.5]' AS distance
+FROM items
+WHERE price < 3.00
+ORDER BY embedding <-> '[0.5, 0.5, 0.5, 0.5]'
+LIMIT 5;
+----
+
+=== Complex Filtering
+
+[source,sql]
+----
+-- Find similar vegetables, price between $1-$2, recent items
+SELECT
+    name,
+    price,
+    created_at,
+    embedding <=> '[0.2, 0.1, 0.8, 0.3]' AS distance
+FROM items
+WHERE category = 'Vegetable'
+  AND price BETWEEN 1.00 AND 2.00
+  AND created_at > NOW() - INTERVAL '30 days'
+ORDER BY embedding <=> '[0.2, 0.1, 0.8, 0.3]'
+LIMIT 5;
+----
+
+== Distance Calculations
+
+=== Compare All Distance Metrics
+
+[source,sql]
+----
+-- Compare different distance metrics for same query
+SELECT
+    name,
+    category,
+    embedding <-> '[1.0, 0.5, 0.2, 0.1]' AS l2_distance,
+    embedding <=> '[1.0, 0.5, 0.2, 0.1]' AS cosine_distance,
+    embedding <#> '[1.0, 0.5, 0.2, 0.1]' AS neg_inner_product,
+    embedding <+> '[1.0, 0.5, 0.2, 0.1]' AS l1_distance
+FROM items
+ORDER BY l2_distance
+LIMIT 5;
+----
+
+=== Pairwise Distances
+
+[source,sql]
+----
+-- Calculate distances between all pairs of items
+SELECT
+    a.name AS item_a,
+    b.name AS item_b,
+    a.embedding <-> b.embedding AS distance
+FROM items a
+CROSS JOIN items b
+WHERE a.id < b.id
+ORDER BY distance
+LIMIT 10;
+
+-- Shows which items are most similar to each other
+----
+
+== Aggregation Queries
+
+=== Average Vector by Category
+
+[source,sql]
+----
+-- Calculate category centroids
+SELECT
+    category,
+    AVG(embedding) AS category_centroid,
+    COUNT(*) AS item_count
+FROM items
+GROUP BY category
+ORDER BY category;
+----
+
+=== Find Items Closest to Category Center
+
+[source,sql]
+----
+-- Find most representative item in each category
+WITH category_centroids AS (
+    SELECT
+        category,
+        AVG(embedding) AS centroid
+    FROM items
+    GROUP BY category
+)
+SELECT DISTINCT ON (i.category)
+    i.category,
+    i.name AS representative_item,
+    i.embedding <-> cc.centroid AS distance_from_center
+FROM items i
+JOIN category_centroids cc ON i.category = cc.category
+ORDER BY i.category, distance_from_center
+LIMIT 10;
+----
