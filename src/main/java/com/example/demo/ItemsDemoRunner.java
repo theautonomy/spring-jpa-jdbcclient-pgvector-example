@@ -1,10 +1,13 @@
-package com.example.demo.config;
+package com.example.demo;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 import com.example.demo.entity.Item;
+import com.example.demo.entity.ItemVector;
 import com.example.demo.service.ItemJdbcService;
 import com.example.demo.service.ItemService;
+import com.example.demo.service.ItemVectorService;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,10 +29,15 @@ public class ItemsDemoRunner implements CommandLineRunner {
 
     private final ItemService itemService;
     private final ItemJdbcService itemJdbcService;
+    private final ItemVectorService itemVectorService;
 
-    public ItemsDemoRunner(ItemService itemService, ItemJdbcService itemJdbcService) {
+    public ItemsDemoRunner(
+            ItemService itemService,
+            ItemJdbcService itemJdbcService,
+            ItemVectorService itemVectorService) {
         this.itemService = itemService;
         this.itemJdbcService = itemJdbcService;
+        this.itemVectorService = itemVectorService;
     }
 
     @Override
@@ -39,11 +47,16 @@ public class ItemsDemoRunner implements CommandLineRunner {
         log.info("=".repeat(80) + "\n");
 
         try {
+            demonstrateSaveNewItem();
             demonstrateBasicQueries();
             demonstrateVectorSimilarityJPA();
             demonstrateVectorSimilarityJdbc();
             demonstrateFilteredSearch();
             demonstrateDistanceComparison();
+
+            // ItemVector demonstrations using custom UserType
+            demonstrateItemVectorSave();
+            demonstrateItemVectorQueries();
 
             log.info("\n" + "=".repeat(80));
             log.info("DEMO COMPLETED - Check the API endpoints at /api/items/*");
@@ -52,6 +65,38 @@ public class ItemsDemoRunner implements CommandLineRunner {
         } catch (Exception e) {
             log.error("Error running items demo", e);
         }
+    }
+
+    private void demonstrateSaveNewItem() {
+        log.info(">>> 0. SAVE NEW ITEM (JPA)");
+        log.info("-".repeat(80));
+
+        // Create a new item with embedding vector
+        float[] embedding = {0.9f, 0.7f, 0.3f, 0.2f};
+        Item newItem = new Item("Mango", "Fruit", new BigDecimal("3.99"), embedding);
+
+        log.info("Creating new item: {}", newItem.getName());
+        log.info("  Category: {}", newItem.getCategory());
+        log.info("  Price: ${}", newItem.getPrice());
+        log.info("  Embedding: {}", formatVector(embedding));
+
+        // Save the item
+        Item savedItem = itemService.saveItem(newItem);
+
+        log.info("Item saved successfully with ID: {}", savedItem.getId());
+        log.info("  Created at: {}", savedItem.getCreatedAt());
+
+        // Retrieve the embedding value from the saved item
+        float[] retrievedEmbedding = savedItem.getEmbedding();
+        log.info("Retrieved embedding: {}", formatVector(retrievedEmbedding));
+
+        // You can also access individual values
+        if (retrievedEmbedding != null && retrievedEmbedding.length > 0) {
+            log.info("  First dimension value: {}", retrievedEmbedding[0]);
+            log.info("  Embedding dimensions: {}", retrievedEmbedding.length);
+        }
+
+        log.info("");
     }
 
     private void demonstrateBasicQueries() {
@@ -211,6 +256,87 @@ public class ItemsDemoRunner implements CommandLineRunner {
                                         result.cosineDistance(),
                                         result.negInnerProduct(),
                                         result.l1Distance())));
+
+        log.info("");
+    }
+
+    private void demonstrateItemVectorSave() {
+        log.info(">>> 6. ITEMVECTOR - SAVE WITH CUSTOM USERTYPE");
+        log.info("-".repeat(80));
+        log.info(
+                "This demonstrates using the custom PgVectorType UserType with pgvector-java library");
+
+        // Create a new ItemVector with embedding
+        float[] embedding = {0.8f, 0.6f, 0.4f, 0.2f};
+        ItemVector newItem =
+                new ItemVector("Pineapple", "Fruit", new BigDecimal("4.49"), embedding);
+
+        log.info("Creating new ItemVector: {}", newItem.getName());
+        log.info("  Category: {}", newItem.getCategory());
+        log.info("  Price: ${}", newItem.getPrice());
+        log.info("  Embedding: {}", formatVector(embedding));
+
+        // Save the item using custom UserType
+        ItemVector savedItem = itemVectorService.saveItem(newItem);
+
+        log.info("ItemVector saved successfully with ID: {}", savedItem.getId());
+        log.info("  Created at: {}", savedItem.getCreatedAt());
+
+        // Retrieve the embedding - the custom UserType handles the conversion
+        float[] retrievedEmbedding = savedItem.getEmbedding();
+        log.info("Retrieved embedding via custom UserType: {}", formatVector(retrievedEmbedding));
+
+        if (retrievedEmbedding != null && retrievedEmbedding.length > 0) {
+            log.info("  First dimension: {}", retrievedEmbedding[0]);
+            log.info("  Total dimensions: {}", retrievedEmbedding.length);
+        }
+
+        log.info("");
+    }
+
+    private void demonstrateItemVectorQueries() {
+        log.info(">>> 7. ITEMVECTOR - VECTOR SIMILARITY QUERIES");
+        log.info("-".repeat(80));
+        log.info("Vector queries work the same way with custom UserType");
+
+        // Find similar items using L2 distance
+        String fruitVector = "[1.0, 0.5, 0.2, 0.1]";
+        log.info("Query: Find items similar to Apple-like vector using L2 distance");
+        log.info("Query vector: {}", fruitVector);
+
+        List<ItemVector> similarItems = itemVectorService.findSimilarItemsL2(fruitVector, 5);
+        log.info("Results:");
+        similarItems.forEach(
+                item ->
+                        log.info(
+                                "  - {}: {} (category: {}, price: ${})",
+                                item.getName(),
+                                formatVector(item.getEmbedding()),
+                                item.getCategory(),
+                                item.getPrice()));
+
+        // Find similar items using cosine distance
+        String vegetableVector = "[0.2, 0.1, 0.8, 0.3]";
+        log.info("\nQuery: Find items similar to vegetables using cosine distance");
+        log.info("Query vector: {}", vegetableVector);
+
+        List<ItemVector> similarVeggies =
+                itemVectorService.findSimilarItemsCosine(vegetableVector, 3);
+        log.info("Results:");
+        similarVeggies.forEach(
+                item ->
+                        log.info(
+                                "  - {}: {} ({})",
+                                item.getName(),
+                                formatVector(item.getEmbedding()),
+                                item.getCategory()));
+
+        // Category-filtered search
+        log.info("\nQuery: Find similar fruits only (filtered by category)");
+        List<ItemVector> similarFruits =
+                itemVectorService.findSimilarInCategory("Fruit", fruitVector, 3);
+        log.info("Results:");
+        similarFruits.forEach(item -> log.info("  - {}: ${}", item.getName(), item.getPrice()));
 
         log.info("");
     }
